@@ -29,6 +29,8 @@ from google_automation import GoogleAutomationError, check_gemini_offer
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=config.LOG_LEVEL, format=config.LOG_FORMAT)
+# HTTP request URLs include the Telegram token; keep them out of log files.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ── Conversation states ───────────────────────────────────────────────────────

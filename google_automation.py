@@ -93,8 +93,11 @@ async def _gmail_login(
         driver.get(config.GMAIL_LOGIN_URL)
 
         # ── Email step ────────────────────────────────────────────────────────
-        email_field = _wait_for(driver, By.CSS_SELECTOR,
-                                'input[type="email"]')
+        email_field = _wait_for(
+            driver,
+            By.CSS_SELECTOR,
+            'input[name="identifier"], input[type="email"], input#identifierId',
+        )
         email_field.clear()
         email_field.send_keys(email)
         next_btn = _wait_for(driver, By.ID, "identifierNext")
@@ -102,10 +105,10 @@ async def _gmail_login(
 
         # ── Password step ─────────────────────────────────────────────────────
         try:
-            password_field = _wait_for(driver, By.CSS_SELECTOR,
-                                       'input[type="password"]')
+            password_field = WebDriverWait(driver, 15).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[name="Passwd"], input[name="password"], input[type="password"]'))
+            )
         except TimeoutException:
-            # Handle case where Google flags the email as invalid immediately
             logger.warning("Password field did not appear. Email may be invalid.")
             return False
 
@@ -117,32 +120,70 @@ async def _gmail_login(
 
         # ── 2FA / Challenge step (if it appears) ─────────────────────────────
         try:
-            # Check for a common 2FA input field within a short timeout
-            otp_field = WebDriverWait(driver, 7).until(
-                EC.presence_of_element_located((By.ID, "totpPin"))
+            # Wait briefly to see if redirected to a challenge page or PIN input
+            WebDriverWait(driver, 10).until(
+                lambda d: "challenge" in d.current_url or d.find_elements(By.CSS_SELECTOR, '#securityKeyOtpInputId, #totpPin, #idvPin, input[type="tel"]')
             )
-            logger.info("2FA code requested by Google.")
+            if "challenge" in driver.current_url or driver.find_elements(By.CSS_SELECTOR, '#securityKeyOtpInputId, #totpPin, #idvPin, input[type="tel"]'):
+                logger.info("2FA / verification challenge requested by Google (URL: %s).", driver.current_url)
 
-            # Use the callback to ask the user for the code via Telegram
-            otp_code = await request_2fa_callback()
+                # Check for challenge options on any challenge page (selection, pwd, etc.)
+                if "challenge" in driver.current_url:
+                    ebhgs = driver.find_elements(By.CSS_SELECTOR, 'div[jsname="EBHGs"], [data-challengetype]')
+                    if not ebhgs:
+                        # Try clicking "Tentar de outro jeito" / "Try another way" if options list isn't directly shown
+                        other_ways = driver.find_elements(By.CSS_SELECTOR, 'button, div[role="link"], a, li')
+                        for ow in other_ways:
+                            txt = ow.text.lower()
+                            if "outro jeito" in txt or "another way" in txt:
+                                logger.info("Clicking 'Try another way' link: %s", ow.text[:60])
+                                driver.execute_script("arguments[0].click();", ow)
+                                time.sleep(3)
+                                ebhgs = driver.find_elements(By.CSS_SELECTOR, 'div[jsname="EBHGs"], [data-challengetype]')
+                                break
 
-            if not otp_code:
-                logger.warning("User did not provide a 2FA code.")
-                return False
+                    for el in ebhgs:
+                        ctype = el.get_attribute("data-challengetype") or ""
+                        txt = el.text.lower()
+                        if ctype in ["37", "5", "9"] or any(kw in txt for kw in ["código", "sms", "segurança"]):
+                            logger.info("Clicking challenge option type=%s: %s", ctype, el.text[:60])
+                            driver.execute_script("arguments[0].click();", el)
+                            time.sleep(4)
+                            break
 
-            otp_field.send_keys(otp_code)
-            otp_next = _wait_for(driver, By.ID, "totpNext")
-            otp_next.click()
+                # Look for PIN / Security Code input field
+                try:
+                    pin_field = WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, '#securityKeyOtpInputId, #totpPin, #idvPin, input[name="Pin"], input[name="pin"], input[type="tel"], input[name="code"]'))
+                    )
+                    logger.info("PIN / Security code input field displayed. Prompting user...")
+                    otp_code = await request_2fa_callback()
+                    if not otp_code:
+                        logger.warning("User did not provide a 2FA / Security code.")
+                        return False
+                    pin_field.clear()
+                    pin_field.send_keys(otp_code)
+                    time.sleep(1)
+                    
+                    next_btns = driver.find_elements(By.CSS_SELECTOR, '#totpNext, #idvPreregisteredPhoneNext, #idvanyphoneNext, [id$="Next"], button[type="submit"]')
+                    if next_btns:
+                        driver.execute_script("arguments[0].click();", next_btns[0])
+                    else:
+                        pin_field.send_keys('\n')
+                except TimeoutException:
+                    logger.info("No PIN input field located; waiting for user prompt/approval on device.")
 
         except TimeoutException:
-            # No 2FA page appeared, which is normal. Continue.
             logger.info("2FA step not required.")
             pass
 
         # ── Verify login ──────────────────────────────────────────────────────
-        # Wait for either the account page to load or the URL to change
+        # Wait for account page, onboarding, or Google One to load
         WebDriverWait(driver, config.WEBDRIVER_TIMEOUT).until(
-            EC.url_contains("myaccount.google.com")
+            lambda d: "myaccount.google.com" in d.current_url
+            or "gds.google.com" in d.current_url
+            or "one.google.com" in d.current_url
+            or "signin" not in d.current_url
         )
 
         current_url = driver.current_url
@@ -150,11 +191,10 @@ async def _gmail_login(
         hostname = parsed.hostname or ""
         path = parsed.path or ""
         if (
-            hostname == "myaccount.google.com"
-            or hostname.endswith(".google.com")
-            and "/u/" in path
+            hostname in ["myaccount.google.com", "gds.google.com", "one.google.com"]
+            or (hostname.endswith(".google.com") and "signin" not in path)
         ):
-            logger.info("Login succeeded for %s", email)
+            logger.info("Login succeeded for %s (URL: %s)", email, current_url)
             return True
 
         # Check for error messages

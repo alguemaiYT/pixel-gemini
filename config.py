@@ -14,8 +14,10 @@ DEVICE_MANUFACTURER = "Google"
 ANDROID_VERSION = "16"
 ANDROID_SDK = "36"
 BUILD_ID = "AP4A.250405.002"
-CHROME_VERSION = "124.0.6367.82"
-CHROME_MAJOR_VERSION = 124
+# Keep this in sync with the locally installed Chrome version. This value is
+# passed to undetected-chromedriver so it downloads a compatible driver.
+CHROME_VERSION = "150.0.7871.184"
+CHROME_MAJOR_VERSION = 150
 
 # Pool of realistic Pixel 10 Pro user-agent strings.
 # The actual UA is assembled dynamically in device_simulator.py by
@@ -52,7 +54,7 @@ GEMINI_OFFER_KEYWORDS = [
 ]
 
 # ── Selenium / WebDriver ──────────────────────────────────────────────────────
-WEBDRIVER_TIMEOUT = 30          # seconds – explicit wait
+WEBDRIVER_TIMEOUT = 90          # seconds – explicit wait for Google login/challenges
 IMPLICIT_WAIT = 10              # seconds
 PAGE_LOAD_TIMEOUT = 60          # seconds
 HEADLESS = True                 # always headless on Replit
