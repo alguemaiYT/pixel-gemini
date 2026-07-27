@@ -142,21 +142,38 @@ async def _gmail_login(
                                 ebhgs = driver.find_elements(By.CSS_SELECTOR, 'div[jsname="EBHGs"], [data-challengetype]')
                                 break
 
+                    # Priority-based selection: find the best challenge type
+                    best_type = None
                     for el in ebhgs:
                         ctype = el.get_attribute("data-challengetype") or ""
-                        txt = el.text.lower()
-                        if ctype in ["37", "5", "9"] or any(kw in txt for kw in ["código", "sms", "segurança"]):
-                            logger.info("Clicking challenge option type=%s: %s", ctype, el.text[:60])
-                            driver.execute_script("arguments[0].click();", el)
-                            time.sleep(4)
+                        if ctype == "8":
+                            best_type = "8"
+                            best_el = el
                             break
+                        elif ctype == "9" and best_type is None:
+                            best_type = "9"
+                            best_el = el
+                        elif ctype == "5" and best_type is None:
+                            best_type = "5"
+                            best_el = el
+                        elif ctype == "39" and best_type is None:
+                            best_type = "39"
+                            best_el = el
+                        elif ctype == "37" and best_type is None:
+                            best_type = "37"
+                            best_el = el
+
+                    if best_type:
+                        logger.info("Clicking challenge option type=%s: %s", best_type, best_el.text[:60])
+                        driver.execute_script("arguments[0].click();", best_el)
+                        time.sleep(4)
 
                 # Look for PIN / Security Code input field
                 try:
-                    pin_field = WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, '#securityKeyOtpInputId, #totpPin, #idvPin, input[name="Pin"], input[name="pin"], input[type="tel"], input[name="code"]'))
+                    pin_field = WebDriverWait(driver, 15).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, '#securityKeyOtpInputId, #totpPin, #idvPin, input[name="Pin"], input[name="pin"], input[type="tel"], input[name="code"]'))
                     )
-                    logger.info("PIN / Security code input field displayed. Prompting user...")
+                    logger.info("PIN / Security code input field ready. Prompting user...")
                     otp_code = await request_2fa_callback()
                     if not otp_code:
                         logger.warning("User did not provide a 2FA / Security code.")
