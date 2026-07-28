@@ -303,6 +303,9 @@ def _navigate_google_one(driver: uc.Chrome) -> Optional[str]:
     """
     Navigate to Google One and attempt to find the Gemini Pro offer link.
 
+    If the offer link is locked, navigate to it and click the activation
+    button to obtain the real checkout URL.
+
     Returns the payment/activation URL or None if not found.
     """
     for url in (config.GOOGLE_ONE_URL, config.GOOGLE_ONE_OFFERS_URL):
@@ -316,16 +319,76 @@ def _navigate_google_one(driver: uc.Chrome) -> Optional[str]:
                 '[aria-label="Accept all"]',
                 'button[jsname="higCR"]',
                 '[data-action="accept"]',
-            ): # Use a short timeout for optional elements
+            ):
                 try:
                     btn = driver.find_element(By.CSS_SELECTOR, selector)
-                    btn.click() # Click and continue without a fixed wait
+                    btn.click()
                     break
                 except NoSuchElementException:
                     pass
 
             link = _extract_payment_link(driver)
             if link:
+                # If the link is locked, navigate there and click activate
+                if "LOCKED" in link.upper():
+                    logger.info("Offer link is locked. Navigating to %s to activate...", link)
+                    try:
+                        driver.get(link)
+                        time.sleep(3)
+                        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
+                        # Look for activation / claim / "get started" button
+                        activate_keywords = [
+                            "ativar", "activate", "get started", "começar",
+                            "claim", "resgatar", "assinar", "subscribe",
+                            "experimentar", "try", "activate now",
+                            "aproveite a oferta", "aproveitar", "aceitar",
+                            "teste grátis", "avaliar", "iniciar",
+                        ]
+                        for sel in ("button", "[role='button']", "a"):
+                            buttons = driver.find_elements(By.CSS_SELECTOR, sel)
+                            for btn in buttons:
+                                txt = btn.text.lower()
+                                if any(kw in txt for kw in activate_keywords):
+                                    logger.info("Clicking activation button: %s", btn.text[:60])
+                                    driver.execute_script("arguments[0].click();", btn)
+                                    time.sleep(5)
+
+                                    # Close any Chrome sign-in intercept window
+                                    original = driver.current_window_handle
+                                    for handle in driver.window_handles:
+                                        if handle != original:
+                                            try:
+                                                driver.switch_to.window(handle)
+                                                if "chrome-signin" in driver.current_url or "signin-dice" in driver.current_url:
+                                                    driver.close()
+                                                else:
+                                                    checkout_url = driver.current_url
+                                                    logger.info("Checkout URL from new window: %s", checkout_url)
+                                                    return checkout_url
+                                            except:
+                                                pass
+                                    try:
+                                        driver.switch_to.window(original)
+                                    except:
+                                        pass
+
+                                    time.sleep(3)
+
+                                    # Look for checkout iframe on the current page
+                                    for f in driver.find_elements(By.TAG_NAME, "iframe"):
+                                        src = f.get_attribute("src") or ""
+                                        if "play.google.com" in src or "eacquire" in src or "checkout" in src or "pay" in src:
+                                            logger.info("Found checkout iframe: %s", src)
+                                            return src
+
+                                    # Return current URL as fallback
+                                    final_url = driver.current_url
+                                    logger.info("Final URL after activation click: %s", final_url)
+                                    return final_url
+                    except Exception as exc:
+                        logger.warning("Error navigating to locked offer: %s", exc)
+
                 return link
 
         except (TimeoutException, WebDriverException) as exc:
